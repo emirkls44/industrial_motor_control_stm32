@@ -1,6 +1,8 @@
 Debug/
 Release/
 
+.settings/
+
 *.o
 *.d
 *.elf
@@ -8,6 +10,7 @@ Release/
 *.list
 *.su
 *.cyclo
+
 
 *.bin
 *.hex

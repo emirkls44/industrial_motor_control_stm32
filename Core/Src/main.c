@@ -47,6 +47,10 @@ TIM_HandleTypeDef htim1;
 /* USER CODE BEGIN PV */
 uint32_t adc_value = 0;
 uint8_t motor_enabled = 0;
+
+uint8_t current_duty = 0;
+uint8_t target_duty = 0;
+uint32_t last_ramp_tick = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -138,13 +142,38 @@ int main(void)
 
 		    HAL_ADC_Stop(&hadc);
 
-		    uint8_t duty = (adc_value * 100) / 4095;
+		    target_duty = (adc_value * 100) / 4095;
 		    if (motor_enabled)
 		    {
-		        Motor_SetDuty(duty);
+		        if (HAL_GetTick() - last_ramp_tick >= 50)
+		        {
+		            last_ramp_tick = HAL_GetTick();
+
+		            if (current_duty < target_duty)
+		            {
+		                current_duty += 2;
+
+		                if (current_duty > target_duty)
+		                {
+		                    current_duty = target_duty;
+		                }
+		            }
+		            else if (current_duty > target_duty)
+		            {
+		                current_duty -= 2;
+
+		                if (current_duty < target_duty)
+		                {
+		                    current_duty = target_duty;
+		                }
+		            }
+
+		            Motor_SetDuty(current_duty);
+		        }
 		    }
 		    else
 		    {
+		        current_duty = 0;
 		        Motor_SetDuty(0);
 		    }
 
