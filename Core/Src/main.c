@@ -117,16 +117,20 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	//acil durum için
-		if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_RESET)
-		{
-		    motor_enabled = 0;
-		    current_duty = 0;
-		    target_duty = 0;
+		  //acil durum butonu içim
+		    if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_RESET)
+		    {
+		        motor_enabled = 0;
+		        current_duty = 0;
+		        target_duty = 0;
 
-		    Motor_SetDuty(0);
-		}
-	//stm32f0dıscovery üzerindeki mavi buton
+		        Motor_SetDuty(0);
+
+		        HAL_Delay(20);
+		        continue;
+		    }
+
+		    //START/STOP butonu
 		    if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_SET)
 		    {
 		        HAL_Delay(30);
@@ -135,7 +139,6 @@ int main(void)
 		        {
 		            motor_enabled = !motor_enabled;
 
-
 		            while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_SET)
 		            {
 		                HAL_Delay(1);
@@ -143,7 +146,7 @@ int main(void)
 		        }
 		    }
 
-	//potansiyometre
+		    //potansiyometre
 		    HAL_ADC_Start(&hadc);
 		    HAL_ADC_PollForConversion(&hadc, 100);
 
@@ -152,10 +155,12 @@ int main(void)
 		    HAL_ADC_Stop(&hadc);
 
 		    target_duty = (adc_value * 100) / 4095;
+
 		    if (target_duty < MOTOR_MIN_DUTY)
 		    {
 		        target_duty = 0;
 		    }
+
 		    if (motor_enabled)
 		    {
 		        if (HAL_GetTick() - last_ramp_tick >= 50)
@@ -173,9 +178,11 @@ int main(void)
 		            }
 		            else if (current_duty > target_duty)
 		            {
-		                current_duty -= 2;
-
-		                if (current_duty < target_duty)
+		                if (current_duty > target_duty + 2)
+		                {
+		                    current_duty -= 2;
+		                }
+		                else
 		                {
 		                    current_duty = target_duty;
 		                }
@@ -186,15 +193,27 @@ int main(void)
 		    }
 		    else
 		    {
-		        current_duty = 0;
-		        Motor_SetDuty(0);
+		        if (HAL_GetTick() - last_ramp_tick >= 50)
+		        {
+		            last_ramp_tick = HAL_GetTick();
+
+		            if (current_duty > 2)
+		            {
+		                current_duty -= 2;
+		            }
+		            else
+		            {
+		                current_duty = 0;
+		            }
+
+		            Motor_SetDuty(current_duty);
+		        }
 		    }
 
 		    HAL_Delay(20);
-	}
   /* USER CODE END 3 */
 }
-
+}
 /**
   * @brief System Clock Configuration
   * @retval None
