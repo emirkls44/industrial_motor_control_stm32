@@ -31,7 +31,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define MOTOR_MIN_DUTY 43
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -143,6 +143,10 @@ int main(void)
 		    HAL_ADC_Stop(&hadc);
 
 		    target_duty = (adc_value * 100) / 4095;
+		    if (target_duty < MOTOR_MIN_DUTY)
+		    {
+		        target_duty = 0;
+		    }
 		    if (motor_enabled)
 		    {
 		        if (HAL_GetTick() - last_ramp_tick >= 50)
