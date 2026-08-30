@@ -26,7 +26,7 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN TD */
-
+extern UART_HandleTypeDef huart1;
 /* USER CODE END TD */
 
 /* Private define ------------------------------------------------------------*/
@@ -141,5 +141,8 @@ void SysTick_Handler(void)
 /******************************************************************************/
 
 /* USER CODE BEGIN 1 */
-
+void USART1_IRQHandler(void)
+{
+    HAL_UART_IRQHandler(&huart1);
+}
 /* USER CODE END 1 */
