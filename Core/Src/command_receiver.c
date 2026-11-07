@@ -1,142 +1,107 @@
 #include "command_receiver.h"
 
-#define HEADER_1       0xAA
-#define HEADER_2       0x55
-#define PROTOCOL_VER   0x01
-#define MSG_COMMAND    0x02
-#define PAYLOAD_LEN    0x02
-#define FRAME_SIZE     8
-
-static uint8_t crc8(const uint8_t *data, uint16_t length)
+void CommandReceiver_Init(CommandReceiver_t *receiver, UART_HandleTypeDef *huart)
 {
-    uint8_t crc = 0x00;
-
-    for (uint16_t i = 0; i < length; i++)
-    {
-        crc ^= data[i];
-
-        for (uint8_t bit = 0; bit < 8; bit++)
-        {
-            if (crc & 0x80)
-            {
-                crc = (uint8_t)((crc << 1) ^ 0x07);
-            }
-            else
-            {
-                crc <<= 1;
-            }
-        }
-    }
-
-    return crc;
-}
-
-static void process_byte(CommandReceiver_t *receiver, uint8_t byte)
-{
-    if (receiver->index == 0)
-    {
-        if (byte == HEADER_1)
-        {
-            receiver->frame[0] = byte;
-            receiver->index = 1;
-        }
-        return;
-    }
-
-    if (receiver->index == 1)
-    {
-        if (byte == HEADER_2)
-        {
-            receiver->frame[1] = byte;
-            receiver->index = 2;
-        }
-        else
-        {
-            receiver->index = 0;
-        }
-        return;
-    }
-
-    receiver->frame[receiver->index++] = byte;
-
-    if (receiver->index < FRAME_SIZE)
+    if (receiver == NULL)
     {
         return;
     }
 
-    receiver->index = 0;
-
-    if (receiver->frame[2] != PROTOCOL_VER ||
-        receiver->frame[3] != MSG_COMMAND ||
-        receiver->frame[4] != PAYLOAD_LEN)
-    {
-        return;
-    }
-
-    if (crc8(&receiver->frame[2], 5) != receiver->frame[7])
-    {
-        return;
-    }
-
-    RemoteCommand_t command = (RemoteCommand_t)receiver->frame[5];
-
-    if (command != REMOTE_CMD_START &&
-        command != REMOTE_CMD_STOP &&
-        command != REMOTE_CMD_SET_DUTY)
-    {
-        return;
-    }
-
-    receiver->pending_command = command;
-    receiver->pending_value = receiver->frame[6];
-    receiver->command_pending = true;
-}
-
-void CommandReceiver_Init(CommandReceiver_t *receiver,
-                          UART_HandleTypeDef *huart)
-{
     receiver->huart = huart;
-    receiver->rx_byte = 0;
-    receiver->index = 0;
+    Protocol_ParserInit(&receiver->parser);
+    receiver->rx_byte = 0U;
+    receiver->last_frame_tick = HAL_GetTick();
+    receiver->uart_errors = 0U;
     receiver->command_pending = false;
-    receiver->pending_command = REMOTE_CMD_NONE;
-    receiver->pending_value = 0;
+    receiver->pending_command = 0U;
+    receiver->pending_value = 0U;
 }
 
-void CommandReceiver_Start(CommandReceiver_t *receiver)
+HAL_StatusTypeDef CommandReceiver_Start(CommandReceiver_t *receiver)
 {
-    HAL_UART_Receive_IT(receiver->huart, &receiver->rx_byte, 1);
+    if ((receiver == NULL) || (receiver->huart == NULL))
+    {
+        return HAL_ERROR;
+    }
+
+    return HAL_UART_Receive_IT(receiver->huart, &receiver->rx_byte, 1U);
 }
 
-void CommandReceiver_RxCpltCallback(CommandReceiver_t *receiver,
-                                    UART_HandleTypeDef *huart)
+void CommandReceiver_OnRxComplete(CommandReceiver_t *receiver, UART_HandleTypeDef *huart)
 {
-    if (huart != receiver->huart)
+    if ((receiver == NULL) || (huart != receiver->huart))
     {
         return;
     }
 
-    process_byte(receiver, receiver->rx_byte);
+    ProtocolFrame_t frame;
 
-    HAL_UART_Receive_IT(receiver->huart, &receiver->rx_byte, 1);
+    if (Protocol_ParserFeed(&receiver->parser, receiver->rx_byte, &frame))
+    {
+        ProtocolCommand_t command;
+        uint8_t value;
+
+        if (Protocol_DecodeCommand(&frame, &command, &value))
+        {
+            receiver->last_frame_tick = HAL_GetTick();
+
+            if (command != PROTOCOL_CMD_HEARTBEAT)
+            {
+                receiver->pending_command = (uint8_t)command;
+                receiver->pending_value = value;
+                receiver->command_pending = true;
+            }
+        }
+    }
+
+    if (HAL_UART_Receive_IT(receiver->huart, &receiver->rx_byte, 1U) != HAL_OK)
+    {
+        receiver->uart_errors++;
+    }
 }
 
-bool CommandReceiver_GetCommand(CommandReceiver_t *receiver,
-                                RemoteCommand_t *command,
+void CommandReceiver_OnError(CommandReceiver_t *receiver, UART_HandleTypeDef *huart)
+{
+    if ((receiver == NULL) || (huart != receiver->huart))
+    {
+        return;
+    }
+
+    receiver->uart_errors++;
+
+    /* An overrun aborts the HAL reception. Without restarting it here the
+     * command channel would stay dead until the next reset. For non-blocking
+     * errors (framing, noise) the reception is still running and this call
+     * simply returns HAL_BUSY. */
+    (void)HAL_UART_Receive_IT(receiver->huart, &receiver->rx_byte, 1U);
+}
+
+bool CommandReceiver_GetCommand(CommandReceiver_t *receiver, ProtocolCommand_t *command,
                                 uint8_t *value)
 {
-    if (!receiver->command_pending)
+    if ((receiver == NULL) || (command == NULL) || (value == NULL))
     {
         return false;
     }
 
+    bool available = false;
+    const uint32_t primask = __get_PRIMASK();
     __disable_irq();
 
-    *command = receiver->pending_command;
-    *value = receiver->pending_value;
-    receiver->command_pending = false;
+    if (receiver->command_pending)
+    {
+        *command = (ProtocolCommand_t)receiver->pending_command;
+        *value = receiver->pending_value;
+        receiver->command_pending = false;
+        available = true;
+    }
 
-    __enable_irq();
+    __set_PRIMASK(primask);
 
-    return true;
+    return available;
+}
+
+uint32_t CommandReceiver_GetLastFrameTick(const CommandReceiver_t *receiver)
+{
+    return (receiver != NULL) ? receiver->last_frame_tick : 0U;
 }
