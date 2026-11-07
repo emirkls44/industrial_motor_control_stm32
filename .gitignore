@@ -15,3 +15,9 @@ Release/
 *.bin
 *.hex
 *.log
+# CMake / command-line build
+build/
+
+# Host unit test binaries
+tests/test_protocol
+tests/test_motor_control
