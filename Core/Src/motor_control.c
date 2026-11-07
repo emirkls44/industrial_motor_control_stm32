@@ -1,8 +1,14 @@
 #include "motor_control.h"
 
-#define MOTOR_MIN_DUTY        43U
-#define MOTOR_RAMP_STEP       2U
-#define MOTOR_RAMP_PERIOD_MS  50U
+#define MOTOR_MAX_DUTY       100U
+#define MOTOR_RAMP_STEP      2U  /* % per ramp period        */
+#define MOTOR_RAMP_PERIOD_MS 50U /* -> 40 %/s ramp           */
+
+static void apply_duty(MotorControl_t *motor, uint8_t duty)
+{
+    motor->current_duty = duty;
+    MotorDriver_SetDuty(motor->driver, duty);
+}
 
 void MotorControl_Init(MotorControl_t *motor, MotorDriver_t *driver)
 {
@@ -22,13 +28,17 @@ void MotorControl_Init(MotorControl_t *motor, MotorDriver_t *driver)
 
 void MotorControl_Start(MotorControl_t *motor)
 {
-    if ((motor == NULL) || (motor->state != MOTOR_STOPPED))
+    if (motor == NULL)
     {
         return;
     }
 
-    motor->state = MOTOR_STARTING;
-    motor->last_ramp_tick = HAL_GetTick();
+    /* A start request during a soft stop ramps back up from the current duty. */
+    if ((motor->state == MOTOR_STOPPED) || (motor->state == MOTOR_STOPPING))
+    {
+        motor->state = MOTOR_STARTING;
+        motor->last_ramp_tick = HAL_GetTick();
+    }
 }
 
 void MotorControl_Stop(MotorControl_t *motor)
@@ -51,11 +61,9 @@ void MotorControl_EmergencyStop(MotorControl_t *motor)
         return;
     }
 
-    motor->current_duty = 0U;
     motor->target_duty = 0U;
     motor->state = MOTOR_STOPPED;
-
-    MotorDriver_Stop(motor->driver);
+    apply_duty(motor, 0U);
 }
 
 void MotorControl_SetTargetDuty(MotorControl_t *motor, uint8_t duty)
@@ -65,12 +73,12 @@ void MotorControl_SetTargetDuty(MotorControl_t *motor, uint8_t duty)
         return;
     }
 
-    if (duty > 100U)
+    if (duty > MOTOR_MAX_DUTY)
     {
-        duty = 100U;
+        duty = MOTOR_MAX_DUTY;
     }
 
-    if (duty < MOTOR_MIN_DUTY)
+    if (duty < MOTOR_CONTROL_MIN_DUTY)
     {
         duty = 0U;
     }
@@ -78,14 +86,55 @@ void MotorControl_SetTargetDuty(MotorControl_t *motor, uint8_t duty)
     motor->target_duty = duty;
 }
 
-void MotorControl_Update(MotorControl_t *motor)
+static void ramp_down_to_stop(MotorControl_t *motor)
 {
-    if ((motor == NULL) || (motor->driver == NULL))
+    /* Ramping through the dead zone below MIN_DUTY only heats the motor, so
+     * the output is cut as soon as the duty reaches MIN_DUTY. */
+    if (motor->current_duty <= MOTOR_CONTROL_MIN_DUTY)
     {
+        apply_duty(motor, 0U);
+        motor->state = MOTOR_STOPPED;
         return;
     }
 
-    if (motor->state == MOTOR_STOPPED)
+    const uint8_t above_min = motor->current_duty - MOTOR_CONTROL_MIN_DUTY;
+    const uint8_t step = (above_min < MOTOR_RAMP_STEP) ? above_min : MOTOR_RAMP_STEP;
+
+    apply_duty(motor, motor->current_duty - step);
+}
+
+static void ramp_towards_target(MotorControl_t *motor)
+{
+    uint8_t duty = motor->current_duty;
+
+    /* Start directly at the lowest duty that turns the motor instead of
+     * spending ~1 s stalled between 0 % and MIN_DUTY. */
+    if (duty < MOTOR_CONTROL_MIN_DUTY)
+    {
+        duty = MOTOR_CONTROL_MIN_DUTY;
+    }
+    else if (duty < motor->target_duty)
+    {
+        const uint8_t difference = motor->target_duty - duty;
+        duty += (difference < MOTOR_RAMP_STEP) ? difference : MOTOR_RAMP_STEP;
+    }
+    else if (duty > motor->target_duty)
+    {
+        const uint8_t difference = duty - motor->target_duty;
+        duty -= (difference < MOTOR_RAMP_STEP) ? difference : MOTOR_RAMP_STEP;
+    }
+
+    apply_duty(motor, duty);
+
+    if ((motor->state == MOTOR_STARTING) && (duty == motor->target_duty))
+    {
+        motor->state = MOTOR_RUNNING;
+    }
+}
+
+void MotorControl_Update(MotorControl_t *motor)
+{
+    if ((motor == NULL) || (motor->driver == NULL) || (motor->state == MOTOR_STOPPED))
     {
         return;
     }
@@ -99,68 +148,26 @@ void MotorControl_Update(MotorControl_t *motor)
 
     motor->last_ramp_tick = now;
 
-    /* Normal STOP: soft-stop */
+    /* A target of 0 % stops the motor. It then stays stopped until a new
+     * start command, even if the potentiometer is turned up again. */
+    if (motor->target_duty == 0U)
+    {
+        motor->state = MOTOR_STOPPING;
+    }
+
     if (motor->state == MOTOR_STOPPING)
     {
-        if (motor->current_duty <= MOTOR_RAMP_STEP)
-        {
-            motor->current_duty = 0U;
-            motor->state = MOTOR_STOPPED;
-        }
-        else
-        {
-            motor->current_duty -= MOTOR_RAMP_STEP;
-        }
-
-        MotorDriver_SetDuty(motor->driver, motor->current_duty);
-        return;
+        ramp_down_to_stop(motor);
     }
-
-    /* STARTING / RUNNING: hedef duty'ye yumuşak geçiş */
-    if (motor->current_duty < motor->target_duty)
+    else
     {
-        const uint8_t difference = motor->target_duty - motor->current_duty;
-
-        if (difference <= MOTOR_RAMP_STEP)
-        {
-            motor->current_duty = motor->target_duty;
-        }
-        else
-        {
-            motor->current_duty += MOTOR_RAMP_STEP;
-        }
-    }
-    else if (motor->current_duty > motor->target_duty)
-    {
-        const uint8_t difference = motor->current_duty - motor->target_duty;
-
-        if (difference <= MOTOR_RAMP_STEP)
-        {
-            motor->current_duty = motor->target_duty;
-        }
-        else
-        {
-            motor->current_duty -= MOTOR_RAMP_STEP;
-        }
-    }
-
-    MotorDriver_SetDuty(motor->driver, motor->current_duty);
-
-    if ((motor->state == MOTOR_STARTING) &&
-        (motor->current_duty == motor->target_duty))
-    {
-        motor->state = MOTOR_RUNNING;
+        ramp_towards_target(motor);
     }
 }
 
 MotorState_t MotorControl_GetState(const MotorControl_t *motor)
 {
-    if (motor == NULL)
-    {
-        return MOTOR_STOPPED;
-    }
-
-    return motor->state;
+    return (motor != NULL) ? motor->state : MOTOR_STOPPED;
 }
 
 uint8_t MotorControl_GetCurrentDuty(const MotorControl_t *motor)
@@ -170,5 +177,5 @@ uint8_t MotorControl_GetCurrentDuty(const MotorControl_t *motor)
 
 uint8_t MotorControl_GetTargetDuty(const MotorControl_t *motor)
 {
-	return (motor != NULL) ? motor->target_duty : 0U;
+    return (motor != NULL) ? motor->target_duty : 0U;
 }

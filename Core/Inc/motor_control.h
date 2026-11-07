@@ -3,16 +3,25 @@
 
 #include "motor_driver.h"
 
-typedef enum {
-	MOTOR_STOPPED = 0, MOTOR_STARTING, MOTOR_RUNNING, MOTOR_STOPPING
+/* Below this duty the motor does not turn (measured on the bench). Requests
+ * below it are treated as 0 % and stop the motor. */
+#define MOTOR_CONTROL_MIN_DUTY 43U
+
+typedef enum
+{
+    MOTOR_STOPPED = 0,
+    MOTOR_STARTING,
+    MOTOR_RUNNING,
+    MOTOR_STOPPING
 } MotorState_t;
 
-typedef struct {
-	MotorDriver_t *driver;
-	MotorState_t state;
-	uint8_t current_duty;
-	uint8_t target_duty;
-	uint32_t last_ramp_tick;
+typedef struct
+{
+    MotorDriver_t *driver;
+    MotorState_t state;
+    uint8_t current_duty;
+    uint8_t target_duty;
+    uint32_t last_ramp_tick;
 } MotorControl_t;
 
 void MotorControl_Init(MotorControl_t *motor, MotorDriver_t *driver);

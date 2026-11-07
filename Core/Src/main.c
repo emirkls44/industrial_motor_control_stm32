@@ -21,13 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "motor_driver.h"
-#include "motor_control.h"
-#include "button.h"
-#include "analog_input.h"
-#include "protocol.h"
-#include "communication.h"
-#include "command_receiver.h"
+#include "app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -37,7 +31,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define MOTOR_MIN_DUTY 43
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -52,19 +46,8 @@ TIM_HandleTypeDef htim1;
 
 UART_HandleTypeDef huart1;
 
-CommandReceiver_t command_receiver;
-
 /* USER CODE BEGIN PV */
-static MotorDriver_t motor_driver;
-static MotorControl_t motor_control;
-static AnalogInput_t pot_input;
-static Button_t start_stop_button;
-static Button_t estop_button;
-static Communication_t communication;
-static ProtocolTelemetry_t telemetry;
 
-
-static uint8_t commanded_duty = 0U;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -115,24 +98,7 @@ int main(void)
   MX_ADC_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-  CommandReceiver_Init(&command_receiver, &huart1);
-  CommandReceiver_Start(&command_receiver);
-
-	AnalogInput_Init(&pot_input, &hadc);
-	Button_Init(&start_stop_button,
-	GPIOA,
-	GPIO_PIN_0, GPIO_PIN_SET, 30U);
-
-	Button_Init(&estop_button,
-	GPIOA,
-	GPIO_PIN_3, GPIO_PIN_RESET, 0U);
-
-	if (MotorDriver_Init(&motor_driver, &htim1, TIM_CHANNEL_1) != HAL_OK) {
-		Error_Handler();
-	}
-
-	MotorControl_Init(&motor_control, &motor_driver);
-	Communication_Init(&communication, &huart1, 250U);
+  App_Init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -142,104 +108,8 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  Button_Update(&estop_button);
-
-	  	  Button_Update(&start_stop_button);
-
-	  	  commanded_duty = AnalogInput_ReadPercent(&pot_input);
-
-	  	  RemoteCommand_t remote_cmd;
-	  	  uint8_t remote_value;
-
-	  	  if (CommandReceiver_GetCommand(&command_receiver, &remote_cmd, &remote_value))
-	  	  {
-	  	      if (!Button_IsPressed(&estop_button))
-	  	      {
-	  	          if (remote_cmd == REMOTE_CMD_START)
-	  	          {
-	  	              if (MotorControl_GetState(&motor_control) == MOTOR_STOPPED)
-	  	              {
-	  	                  MotorControl_Start(&motor_control);
-	  	              }
-	  	          }
-	  	          else if (remote_cmd == REMOTE_CMD_STOP)
-	  	          {
-	  	              MotorControl_Stop(&motor_control);
-	  	          }
-	  	      }
-	  	  }
-
-	  	  if (Button_IsPressed(&estop_button))
-
-	  	  {
-
-	  	      MotorControl_EmergencyStop(&motor_control);
-
-	  	      /* E-stop sırasında start butonu event'ini temizle */
-
-	  	      (void)Button_WasPressed(&start_stop_button);
-
-	  	  }
-
-	  	  else
-
-	  	  {
-
-	  	      if (Button_WasPressed(&start_stop_button))
-
-	  	      {
-
-	  	          if (MotorControl_GetState(&motor_control) == MOTOR_STOPPED)
-
-	  	          {
-
-	  	              MotorControl_Start(&motor_control);
-
-	  	          }
-
-	  	          else
-
-	  	          {
-
-	  	              MotorControl_Stop(&motor_control);
-
-	  	          }
-
-	  	      }
-
-	  	      MotorControl_SetTargetDuty(&motor_control, commanded_duty);
-
-	  	      MotorControl_Update(&motor_control);
-
-	  	  }
-
-	  	  /* Telemetry */
-
-	  	  telemetry.state =
-
-	  	      (uint8_t)MotorControl_GetState(&motor_control);
-
-	  	  telemetry.command_duty = commanded_duty;
-
-	  	  telemetry.target_duty =
-
-	  	      MotorControl_GetTargetDuty(&motor_control);
-
-	  	  telemetry.current_duty =
-
-	  	      MotorControl_GetCurrentDuty(&motor_control);
-
-	  	  telemetry.estop =
-
-	  	      Button_IsPressed(&estop_button);
-
-	  	  telemetry.adc_raw =
-
-	  	      (uint16_t)pot_input.last_raw;
-
-	  	  Communication_Update(&communication, &telemetry);
-
-	    }
+    App_Update();
+  }
 
   /* USER CODE END 3 */
 }
@@ -423,11 +293,7 @@ static void MX_USART1_UART_Init(void)
   /* USER CODE END USART1_Init 0 */
 
   /* USER CODE BEGIN USART1_Init 1 */
-	HAL_NVIC_SetPriority(USART1_IRQn, 0, 0);
-	HAL_NVIC_EnableIRQ(USART1_IRQn);
 
-	CommandReceiver_Init(&command_receiver, &huart1);
-	CommandReceiver_Start(&command_receiver);
   /* USER CODE END USART1_Init 1 */
   huart1.Instance = USART1;
   huart1.Init.BaudRate = 115200;
@@ -495,10 +361,6 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-  CommandReceiver_RxCpltCallback(&command_receiver, huart);
-}
 
 /* USER CODE END 4 */
 
@@ -509,10 +371,13 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-	/* User can add his own implementation to report the HAL error return state */
-	__disable_irq();
-	while (1) {
-	}
+  /* Cut the motor output first, then stop. Once the watchdog is running it
+   * resets the MCU from here. */
+  App_EmergencyOutputOff();
+  __disable_irq();
+  while (1)
+  {
+  }
   /* USER CODE END Error_Handler_Debug */
 }
 #ifdef USE_FULL_ASSERT
