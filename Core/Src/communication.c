@@ -1,41 +1,48 @@
 #include "communication.h"
 
-void Communication_Init(Communication_t *comm, UART_HandleTypeDef *huart,
-		uint32_t period_ms) {
-	if (comm == NULL) {
-		return;
-	}
+/* 14 bytes at 115200 baud take ~1.2 ms; 10 ms leaves a wide margin. */
+#define TELEMETRY_TX_TIMEOUT_MS 10U
 
-	comm->huart = huart;
-	comm->sequence = 0U;
-	comm->last_tx_tick = HAL_GetTick();
-	comm->period_ms = period_ms;
+void Communication_Init(Communication_t *comm, UART_HandleTypeDef *huart, uint32_t period_ms)
+{
+    if (comm == NULL)
+    {
+        return;
+    }
+
+    comm->huart = huart;
+    comm->sequence = 0U;
+    comm->last_tx_tick = HAL_GetTick();
+    comm->period_ms = period_ms;
 }
 
-void Communication_Update(Communication_t *comm,
-		const ProtocolTelemetry_t *telemetry) {
-	if ((comm == NULL) || (comm->huart == NULL) || (telemetry == NULL)) {
-		return;
-	}
+void Communication_Update(Communication_t *comm, const ProtocolTelemetry_t *telemetry)
+{
+    if ((comm == NULL) || (comm->huart == NULL) || (telemetry == NULL))
+    {
+        return;
+    }
 
-	const uint32_t now = HAL_GetTick();
+    const uint32_t now = HAL_GetTick();
 
-	if ((now - comm->last_tx_tick) < comm->period_ms) {
-		return;
-	}
+    if ((now - comm->last_tx_tick) < comm->period_ms)
+    {
+        return;
+    }
 
-	comm->last_tx_tick = now;
+    comm->last_tx_tick = now;
 
-	uint8_t packet[PROTOCOL_PACKET_SIZE];
+    uint8_t frame[PROTOCOL_TELEMETRY_FRAME_SIZE];
+    const size_t length = Protocol_EncodeTelemetry(telemetry, comm->sequence, frame, sizeof(frame));
 
-	const uint16_t length = Protocol_BuildTelemetry(packet, sizeof(packet),
-			comm->sequence, telemetry);
+    if (length == 0U)
+    {
+        return;
+    }
 
-	if (length == 0U) {
-		return;
-	}
+    /* The sequence number advances even if a frame is lost, so the receiver
+     * can detect gaps. */
+    comm->sequence++;
 
-	if (HAL_UART_Transmit(comm->huart, packet, length, 10U) == HAL_OK) {
-		comm->sequence++;
-	}
+    (void)HAL_UART_Transmit(comm->huart, frame, (uint16_t)length, TELEMETRY_TX_TIMEOUT_MS);
 }
